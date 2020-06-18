@@ -1,7 +1,7 @@
 sample:
   description: Hello World sample, the simplest userspace
     Zephyr application
-  name: hello world
+  name: hello world user
 common:
     tags: introduction
     harness: console

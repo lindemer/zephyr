@@ -26,6 +26,10 @@
 extern void arm_core_mpu_disable(void);
 #endif
 
+#if defined(CONFIG_RISCV)
+#include <../arch/riscv/include/core_pmp.h>
+#endif
+
 #define INFO(fmt, ...) printk(fmt, ##__VA_ARGS__)
 #define PIPE_LEN 1
 #define BYTES_TO_READ_WRITE 1
@@ -151,6 +155,13 @@ static void test_write_control(void)
 		"lr %0, [0x402]\n"
 		: "=r" (er_status)::
 	);
+#elif defined(CONFIG_RISCV)
+	unsigned int status;
+
+	expect_fault = true;
+	expected_reason = K_ERR_CPU_EXCEPTION;
+	BARRIER();
+	__asm__ volatile("csrr %0, mstatus" : "=r" (status));
 #else
 #error "Not implemented for this architecture"
 	zassert_unreachable("Write to control register did not fault");
@@ -192,6 +203,11 @@ static void test_disable_mmu_mpu(void)
 	expected_reason = K_ERR_CPU_EXCEPTION;
 	BARRIER();
 	arc_core_mpu_disable();
+#elif defined(CONFIG_RISCV)
+	expect_fault = true;
+	expected_reason = K_ERR_CPU_EXCEPTION;
+	BARRIER();
+	pmp_clear_config();
 #else
 #error "Not implemented for this architecture"
 #endif
@@ -326,7 +342,7 @@ static void test_read_priv_stack(void)
 
 	s[0] = 0;
 	priv_stack_ptr = (char *)&s[0] - size;
-#elif defined(CONFIG_ARM) || defined(CONFIG_X86)
+#elif defined(CONFIG_ARM) || defined(CONFIG_X86) || defined(CONFIG_RISCV)
 	/* priv_stack_ptr set by test_main() */
 #else
 #error "Not implemented for this architecture"
@@ -351,7 +367,7 @@ static void test_write_priv_stack(void)
 
 	s[0] = 0;
 	priv_stack_ptr = (char *)&s[0] - size;
-#elif defined(CONFIG_ARM) || defined(CONFIG_X86)
+#elif defined(CONFIG_ARM) || defined(CONFIG_X86) || defined(CONFIG_RISCV)
 	/* priv_stack_ptr set by test_main() */
 #else
 #error "Not implemented for this architecture"
@@ -1205,11 +1221,14 @@ void z_impl_check_syscall_context(void)
 
 	irq_unlock(key);
 
+#if defined(CONFIG_RISCV)
+	/* This arch lock irq during ISR then next test is avoided */
+#else
 	/* Make sure that interrupts aren't locked when handling system calls;
 	 * key has the previous locking state before the above irq_lock() call.
 	 */
 	zassert_true(arch_irq_unlocked(key), "irqs locked during syscall");
-
+#endif
 	/* The kernel should not think we are in ISR context either */
 	zassert_false(k_is_in_isr(), "kernel reports irq context");
 }
@@ -1305,6 +1324,11 @@ void test_main(void)
 	hdr = ((struct z_x86_thread_stack_header *)ztest_thread_stack);
 	priv_stack_ptr = (((char *)&hdr->privilege_stack) +
 			  (sizeof(hdr->privilege_stack) - 1));
+#elif defined(CONFIG_RISCV)
+	struct _thread_arch *thread_struct;
+
+	thread_struct = ((struct _thread_arch *) ztest_thread_stack);
+	priv_stack_ptr = (char *)thread_struct->priv_stack_start + 1;
 #endif
 	k_thread_access_grant(k_current_get(),
 			      &kthread_thread, &kthread_stack,
