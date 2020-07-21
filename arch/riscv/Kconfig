@@ -24,10 +24,11 @@ config FLOAT_HARD
 menu "RISCV Processor Options"
 
 config CORE_E31
-	bool
+	bool "Use E31 core"
+	select RISCV_PMP
 	select ARCH_HAS_USERSPACE
 	select ARCH_HAS_STACK_PROTECTION if PMP_STACK_GUARD
-	default y
+	default n
 	help
 	  This option signifies the use of a core of the E31 family.
 
@@ -111,6 +112,19 @@ config GEN_IRQ_VECTOR_TABLE
 
 config NUM_IRQS
 	int
+
+menuconfig RISCV_PMP
+	bool "RISC-V PMP Support"
+	default n
+	select THREAD_STACK_INFO
+	select MEMORY_PROTECTION
+	select THREAD_USERSPACE_LOCAL_DATA_ARCH_DEFER_SETUP if USERSPACE
+	help
+	  MCU implements Physical Memory Protection.
+
+if RISCV_PMP
+source "arch/riscv/core/pmp/Kconfig"
+endif #RISCV_PMP
 
 endmenu
 
