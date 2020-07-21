@@ -16,3 +16,4 @@ zephyr_library_sources(
 )
 
 zephyr_library_sources_if_kconfig(irq_offload.c)
+zephyr_library_sources_ifdef(CONFIG_USERSPACE userspace.S)

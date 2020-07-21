@@ -221,3 +221,385 @@ void pmp_print(unsigned int index)
 	printf("PMP[%d] :\t%02lX %08lX\n", index, cfg_val, addr_val);
 #endif /* CONFIG_64BIT */
 }
+
+#if defined(CONFIG_USERSPACE)
+void init_user_accesses(struct k_thread *thread)
+{
+	unsigned char index;
+	unsigned char *uchar_pmpcfg;
+
+	index = 0;
+	uchar_pmpcfg = (unsigned char *) thread->arch.u_pmpcfg;
+
+#ifdef CONFIG_PMP_STACK_GUARD
+	index++;
+#endif /* CONFIG_PMP_STACK_GUARD */
+
+	/* MCU state */
+	thread->arch.u_pmpaddr[index] = TO_PMP_ADDR((ulong_t) &is_user_mode);
+	uchar_pmpcfg[index++] = PMP_NA4 | PMP_R;
+
+	/* Program and RO data */
+	thread->arch.u_pmpaddr[index] = TO_PMP_ADDR(0x20000000);
+	uchar_pmpcfg[index++] = PMP_NA4 | PMP_R | PMP_X;
+	thread->arch.u_pmpaddr[index] = TO_PMP_ADDR(0x80000000);
+	uchar_pmpcfg[index++] = PMP_TOR | PMP_R | PMP_X;
+
+	/* RAM */
+	thread->arch.u_pmpaddr[index] = TO_PMP_ADDR(thread->stack_info.start +
+		PMP_GUARD_ALIGN_AND_SIZE);
+	uchar_pmpcfg[index++] = PMP_NA4 | PMP_R | PMP_W;
+	thread->arch.u_pmpaddr[index] = TO_PMP_ADDR(thread->stack_info.start +
+		thread->stack_info.size);
+	uchar_pmpcfg[index++] = PMP_TOR | PMP_R | PMP_W;
+}
+
+void configure_user_allowed_stack(struct k_thread *thread)
+{
+	unsigned int i;
+
+	pmp_clear_config();
+
+	for (i = 0; i < CONFIG_PMP_SLOT; i++)
+		csr_write_enum(CSR_PMPADDR0 + i, thread->arch.u_pmpaddr[i]);
+
+	for (i = 0; i < RISCV_PMP_CFG_NUM; i++)
+		csr_write_enum(CSR_PMPCFG0 + i, thread->arch.u_pmpcfg[i]);
+}
+
+void pmp_add_dynamic(struct k_thread *thread,
+			ulong_t addr,
+			ulong_t size,
+			unsigned char flags)
+{
+	unsigned char index = 0;
+	unsigned char *uchar_pmpcfg;
+
+	/* Check 4 bytes alignment */
+	__ASSERT(((addr & 0x3) == 0) && ((size & 0x3) == 0) && size,
+		 "address/size are not 4 bytes aligned\n");
+
+	/* Get next free entry */
+	uchar_pmpcfg = (unsigned char *) thread->arch.u_pmpcfg;
+
+	index = PMP_REGION_NUM_FOR_U_THREAD;
+
+	while ((index < CONFIG_PMP_SLOT) && uchar_pmpcfg[index])
+		index++;
+
+	__ASSERT((index < CONFIG_PMP_SLOT), "no free PMP entry\n");
+
+	/* Select the best type */
+	if (size == 4) {
+		thread->arch.u_pmpaddr[index] = addr >> PMP_SHIFT_ADDR;
+		uchar_pmpcfg[index] = flags | PMP_NA4;
+	} else if ((addr & (size - 1)) || (size & (size - 1))) {
+		__ASSERT(((index + 1) < CONFIG_PMP_SLOT),
+			"not enough free PMP entries\n");
+		thread->arch.u_pmpaddr[index] = addr >> PMP_SHIFT_ADDR;
+		uchar_pmpcfg[index++] = flags | PMP_NA4;
+		thread->arch.u_pmpaddr[index] = (addr + size) >> PMP_SHIFT_ADDR;
+		uchar_pmpcfg[index++] = flags | PMP_TOR;
+	} else {
+		thread->arch.u_pmpaddr[index] = (addr >> PMP_SHIFT_ADDR) |
+					((size - 1) >> (PMP_SHIFT_ADDR + 1));
+		uchar_pmpcfg[index] = flags | PMP_NAPOT;
+	}
+}
+
+int arch_buffer_validate(void *addr, size_t size, int write)
+{
+	uint32_t index, i;
+	ulong_t pmp_type, pmp_addr_start, pmp_addr_stop;
+	unsigned char *uchar_pmpcfg;
+	struct k_thread *thread = _current;
+	ulong_t start = (ulong_t) addr;
+	ulong_t access_type = PMP_R;
+	ulong_t napot_mask;
+#ifdef CONFIG_64BIT
+	ulong_t max_bit = 64;
+#else
+	ulong_t max_bit = 32;
+#endif /* CONFIG_64BIT */
+
+	if (write)
+		access_type |= PMP_W;
+
+	uchar_pmpcfg = (unsigned char *) thread->arch.u_pmpcfg;
+
+#ifdef CONFIG_PMP_STACK_GUARD
+	index = 1;
+#else
+	index = 0;
+#endif /* CONFIG_PMP_STACK_GUARD */
+
+	for (; (index < CONFIG_PMP_SLOT) && uchar_pmpcfg[index]; index++) {
+		if ((uchar_pmpcfg[index] & access_type) != access_type)
+			continue;
+
+		pmp_type = uchar_pmpcfg[index] & PMP_TYPE_MASK;
+
+/*
+ * Should never happen: the 1st entry is never configured as TOR here
+ */
+		if (pmp_type == PMP_TOR)
+			continue;
+
+		if (pmp_type == PMP_NA4) {
+			pmp_addr_start =
+				FROM_PMP_ADDR(thread->arch.u_pmpaddr[index]);
+
+			if ((index == CONFIG_PMP_SLOT - 1)  ||
+				((uchar_pmpcfg[index + 1] & PMP_TYPE_MASK)
+					!= PMP_TOR)) {
+				pmp_addr_stop = pmp_addr_start + 4;
+			} else {
+				pmp_addr_stop = FROM_PMP_ADDR(
+					thread->arch.u_pmpaddr[index + 1]);
+				index++;
+			}
+		} else {
+			for (i = 0; i < max_bit; i++) {
+				if (!(thread->arch.u_pmpaddr[index] & (1 << i)))
+					break;
+			}
+
+			napot_mask = (1 << i) - 1;
+			pmp_addr_start = FROM_PMP_ADDR(
+				thread->arch.u_pmpaddr[index] & ~napot_mask);
+			pmp_addr_stop = pmp_addr_start + (1 << i);
+		}
+
+		if ((start >= pmp_addr_start) && ((start + size - 1) <
+			pmp_addr_stop))
+			return 0;
+	}
+
+	return 1;
+}
+
+int arch_mem_domain_max_partitions_get(void)
+{
+	return PMP_MAX_DYNAMIC_REGION;
+}
+
+void arch_mem_domain_partition_remove(struct k_mem_domain *domain,
+				       uint32_t  partition_id)
+{
+	sys_dnode_t *node, *next_node;
+	uint32_t index, i, num;
+	ulong_t pmp_type, pmp_addr;
+	unsigned char *uchar_pmpcfg;
+	struct k_thread *thread;
+	ulong_t size = (ulong_t) domain->partitions[partition_id].size;
+	ulong_t start = (ulong_t) domain->partitions[partition_id].start;
+
+	if (size == 4) {
+		pmp_type = PMP_NA4;
+		pmp_addr = start >> PMP_SHIFT_ADDR;
+		num = 1;
+	} else if ((start & (size - 1)) || (size & (size - 1))) {
+		pmp_type = PMP_TOR;
+		pmp_addr = (start + size) >> PMP_SHIFT_ADDR;
+		num = 2;
+	} else {
+		pmp_type = PMP_NAPOT;
+		pmp_addr = (start >> PMP_SHIFT_ADDR) | ((size - 1) >>
+			(PMP_SHIFT_ADDR + 1));
+		num = 1;
+	}
+
+	node = sys_dlist_peek_head(&domain->mem_domain_q);
+	if (!node)
+		return;
+
+	thread = CONTAINER_OF(node, struct k_thread, mem_domain_info);
+
+	uchar_pmpcfg = (unsigned char *) thread->arch.u_pmpcfg;
+	for (index = PMP_REGION_NUM_FOR_U_THREAD;
+		index < CONFIG_PMP_SLOT;
+		index++) {
+		if (((uchar_pmpcfg[index] & PMP_TYPE_MASK) == pmp_type) &&
+			(pmp_addr == thread->arch.u_pmpaddr[index]))
+			break;
+	}
+
+	__ASSERT((index < CONFIG_PMP_SLOT), "partition not found\n");
+
+	if (pmp_type == PMP_TOR)
+		index--;
+
+	SYS_DLIST_FOR_EACH_NODE_SAFE(&domain->mem_domain_q, node, next_node) {
+		thread = CONTAINER_OF(node, struct k_thread, mem_domain_info);
+
+		uchar_pmpcfg = (unsigned char *) thread->arch.u_pmpcfg;
+
+		for (i = index + num; i < CONFIG_PMP_SLOT; i++) {
+			uchar_pmpcfg[i - num] = uchar_pmpcfg[i];
+			thread->arch.u_pmpaddr[i - num] =
+				thread->arch.u_pmpaddr[i];
+		}
+
+		uchar_pmpcfg[CONFIG_PMP_SLOT - 1] = 0;
+		if (num == 2)
+			uchar_pmpcfg[CONFIG_PMP_SLOT - 2] = 0;
+	}
+}
+
+void arch_mem_domain_thread_add(struct k_thread *thread)
+{
+	struct k_mem_partition *partition;
+
+	for (int i = 0, pcount = 0;
+		pcount < thread->mem_domain_info.mem_domain->num_partitions;
+		i++) {
+		partition = &thread->mem_domain_info.mem_domain->partitions[i];
+		if (partition->size == 0) {
+			continue;
+		}
+		pcount++;
+
+		pmp_add_dynamic(thread, (ulong_t) partition->start,
+			(ulong_t) partition->size, partition->attr.pmp_attr);
+	}
+}
+
+void arch_mem_domain_destroy(struct k_mem_domain *domain)
+{
+	sys_dnode_t *node, *next_node;
+	struct k_thread *thread;
+
+	SYS_DLIST_FOR_EACH_NODE_SAFE(&domain->mem_domain_q, node, next_node) {
+		thread = CONTAINER_OF(node, struct k_thread, mem_domain_info);
+
+		arch_mem_domain_thread_remove(thread);
+	}
+}
+
+void arch_mem_domain_partition_add(struct k_mem_domain *domain,
+				    uint32_t partition_id)
+{
+	sys_dnode_t *node, *next_node;
+	struct k_thread *thread;
+	struct k_mem_partition *partition;
+
+	partition = &domain->partitions[partition_id];
+
+	SYS_DLIST_FOR_EACH_NODE_SAFE(&domain->mem_domain_q, node, next_node) {
+		thread = CONTAINER_OF(node, struct k_thread, mem_domain_info);
+
+		pmp_add_dynamic(thread, (ulong_t) partition->start,
+			(ulong_t) partition->size, partition->attr.pmp_attr);
+	}
+}
+
+void arch_mem_domain_thread_remove(struct k_thread *thread)
+{
+	uint32_t i;
+	unsigned char *uchar_pmpcfg;
+
+	uchar_pmpcfg = (unsigned char *) thread->arch.u_pmpcfg;
+
+	for (i = PMP_REGION_NUM_FOR_U_THREAD; i < CONFIG_PMP_SLOT; i++) {
+		uchar_pmpcfg[i] = 0;
+	}
+}
+
+#endif /* CONFIG_USERSPACE */
+
+#ifdef CONFIG_PMP_STACK_GUARD
+
+void init_stack_guard(struct k_thread *thread)
+{
+	unsigned char index = 0;
+	unsigned char *uchar_pmpcfg;
+
+	uchar_pmpcfg = (unsigned char *) thread->arch.s_pmpcfg;
+
+	uchar_pmpcfg++;
+
+	/* stack guard: None */
+	thread->arch.s_pmpaddr[index] = TO_PMP_ADDR(thread->stack_info.start);
+	uchar_pmpcfg[index++] = PMP_NA4;
+	thread->arch.s_pmpaddr[index] =
+		TO_PMP_ADDR(thread->stack_info.start +
+			PMP_GUARD_ALIGN_AND_SIZE);
+	uchar_pmpcfg[index++] = PMP_TOR;
+
+#ifdef CONFIG_USERSPACE
+	if (thread->arch.priv_stack_start) {
+		thread->arch.s_pmpaddr[index] =
+			TO_PMP_ADDR(thread->arch.priv_stack_start);
+		uchar_pmpcfg[index++] = PMP_NA4;
+		thread->arch.s_pmpaddr[index] =
+			TO_PMP_ADDR(thread->arch.priv_stack_start +
+				PMP_GUARD_ALIGN_AND_SIZE);
+		uchar_pmpcfg[index++] = PMP_TOR;
+	}
+#endif /* CONFIG_USERSPACE */
+
+	/* RAM: RW */
+	thread->arch.s_pmpaddr[index] = TO_PMP_ADDR(CONFIG_SRAM_BASE_ADDRESS |
+				TO_NAPOT_RANGE(KB(CONFIG_SRAM_SIZE)));
+	uchar_pmpcfg[index++] = (PMP_NAPOT | PMP_R | PMP_W);
+
+	/* All other memory: RWX */
+#ifdef CONFIG_64BIT
+	thread->arch.s_pmpaddr[index] = 0x1FFFFFFFFFFFFFFF;
+#else
+	thread->arch.s_pmpaddr[index] = 0x1FFFFFFF;
+#endif /* CONFIG_64BIT */
+	uchar_pmpcfg[index] = PMP_NAPOT | PMP_R | PMP_W | PMP_X;
+}
+
+void configure_stack_guard(struct k_thread *thread)
+{
+	unsigned int i;
+
+	/* Disable PMP for machine mode */
+	csr_clear(mstatus, MSTATUS_MPRV);
+
+	pmp_clear_config();
+
+	for (i = 0; i < PMP_REGION_NUM_FOR_STACK_GUARD; i++)
+		csr_write_enum(CSR_PMPADDR1 + i, thread->arch.s_pmpaddr[i]);
+
+	for (i = 0; i < PMP_CFG_CSR_NUM_FOR_STACK_GUARD; i++)
+		csr_write_enum(CSR_PMPCFG0 + i, thread->arch.s_pmpcfg[i]);
+
+	/* Enable PMP for machine mode */
+	csr_set(mstatus, MSTATUS_MPRV);
+}
+
+void configure_interrupt_stack_guard(void)
+{
+	if (PMP_GUARD_ALIGN_AND_SIZE > 4) {
+		pmp_set(0, PMP_NAPOT | PMP_L,
+			*(Z_THREAD_STACK_BUFFER(z_interrupt_stacks[0])) |
+			TO_NAPOT_RANGE(PMP_GUARD_ALIGN_AND_SIZE));
+	} else {
+		pmp_set(0, PMP_NA4 | PMP_L, (ulong_t) z_interrupt_stacks[0]);
+	}
+}
+#endif /* CONFIG_PMP_STACK_GUARD */
+
+#if defined(CONFIG_PMP_STACK_GUARD) || defined(CONFIG_USERSPACE)
+
+void pmp_init_thread(struct k_thread *thread)
+{
+	unsigned char i;
+	ulong_t *pmpcfg;
+
+#if defined(CONFIG_PMP_STACK_GUARD)
+	pmpcfg = thread->arch.s_pmpcfg;
+	for (i = 0; i < PMP_CFG_CSR_NUM_FOR_STACK_GUARD; i++)
+		pmpcfg[i] = 0;
+#endif /* CONFIG_PMP_STACK_GUARD */
+
+#if defined(CONFIG_USERSPACE)
+	pmpcfg = thread->arch.u_pmpcfg;
+	for (i = 0; i < RISCV_PMP_CFG_NUM; i++)
+		pmpcfg[i] = 0;
+#endif /* CONFIG_USERSPACE */
+}
+#endif /* CONFIG_PMP_STACK_GUARD || CONFIG_USERSPACE */

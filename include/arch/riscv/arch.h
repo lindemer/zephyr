@@ -19,11 +19,14 @@
 #include <arch/riscv/exp.h>
 #include <arch/common/sys_io.h>
 #include <arch/common/ffs.h>
-
+#if defined(CONFIG_USERSPACE)
+#include <arch/riscv/syscall.h>
+#endif /* CONFIG_USERSPACE */
 #include <irq.h>
 #include <sw_isr_table.h>
 #include <soc.h>
 #include <devicetree.h>
+#include <arch/riscv/csr.h>
 
 /* stacks, for RISCV architecture stack should be 16byte-aligned */
 #define ARCH_STACK_PTR_ALIGN  16
@@ -85,6 +88,40 @@ extern "C" {
 /* concatenate the values of the arguments into one */
 #define DO_CONCAT(x, y) x ## y
 #define CONCAT(x, y) DO_CONCAT(x, y)
+
+/* Kernel macros for memory attribution
+ * (access permissions and cache-ability).
+ *
+ * The macros are to be stored in k_mem_partition_attr_t
+ * objects. The format of a k_mem_partition_attr_t object
+ * is an uint8_t composed by configuration register flags
+ * located in arch/riscv/include/core_pmp.h
+ */
+
+/* Read-Write access permission attributes */
+#define K_MEM_PARTITION_P_RW_U_RW ((k_mem_partition_attr_t) \
+	{PMP_R | PMP_W})
+#define K_MEM_PARTITION_P_RW_U_RO ((k_mem_partition_attr_t) \
+	{PMP_R})
+#define K_MEM_PARTITION_P_RW_U_NA ((k_mem_partition_attr_t) \
+	{0})
+#define K_MEM_PARTITION_P_RO_U_RO ((k_mem_partition_attr_t) \
+	{PMP_R})
+#define K_MEM_PARTITION_P_RO_U_NA ((k_mem_partition_attr_t) \
+	{0})
+#define K_MEM_PARTITION_P_NA_U_NA ((k_mem_partition_attr_t) \
+	{0})
+
+/* Execution-allowed attributes */
+#define K_MEM_PARTITION_P_RWX_U_RWX ((k_mem_partition_attr_t) \
+	{PMP_R | PMP_W | PMP_X})
+#define K_MEM_PARTITION_P_RX_U_RX ((k_mem_partition_attr_t) \
+	{PMP_R | PMP_X})
+
+/* Typedef for the k_mem_partition attribute */
+typedef struct {
+	uint8_t pmp_attr;
+} k_mem_partition_attr_t;
 
 /*
  * SOC-specific function to get the IRQ number generating the interrupt.
@@ -166,6 +203,10 @@ static inline uint32_t arch_k_cycle_get_32(void)
 {
 	return z_timer_cycle_get_32();
 }
+
+#ifdef CONFIG_USERSPACE
+#include <arch/riscv/error.h>
+#endif /* CONFIG_USERSPACE */
 
 #ifdef __cplusplus
 }

@@ -63,3 +63,30 @@ FUNC_NORETURN void _Fault(const z_arch_esf_t *esf)
 
 	z_riscv_fatal_error(K_ERR_CPU_EXCEPTION, esf);
 }
+
+#ifdef CONFIG_USERSPACE
+FUNC_NORETURN void arch_syscall_oops(void *ssf_ptr)
+{
+	user_fault(K_ERR_KERNEL_OOPS);
+	CODE_UNREACHABLE;
+}
+
+void z_impl_user_fault(unsigned int reason)
+{
+	z_arch_esf_t oops_esf = { 0 };
+
+	if (((_current->base.user_options & K_USER) != 0) &&
+		reason != K_ERR_STACK_CHK_FAIL) {
+		reason = K_ERR_KERNEL_OOPS;
+	}
+	z_riscv_fatal_error(reason, &oops_esf);
+}
+
+static void z_vrfy_user_fault(unsigned int reason)
+{
+	z_impl_user_fault(reason);
+}
+
+#include <syscalls/user_fault_mrsh.c>
+
+#endif /* CONFIG_USERSPACE */

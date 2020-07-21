@@ -9,3 +9,21 @@ config PMP_SLOT
 	help
 	  Depend of the board. Take care to don't put value higher than
 	  The Hardware allow you.
+
+config PMP_STACK_GUARD
+	bool "Thread Stack Guard"
+	default n
+	help
+	  Enable Thread Stack Guards via PMP
+
+if PMP_STACK_GUARD
+
+config PMP_STACK_GUARD_MIN_SIZE
+	int "Guard size"
+	default 4
+	help
+	  Minimum size (and alignment when applicable) of an stack guard
+	  region, which guards the stack of a thread. The width of the
+	  guard is set to 4, to accommodate the riscv granularity.
+
+endif # PMP_STACK_GUARD
