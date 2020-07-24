@@ -31,6 +31,11 @@
 #define _EXCEPTION_SECTION_NAME     exceptions
 #define _RESET_SECTION_NAME         reset
 
+#define _region_min_align 4
+#define MPU_ALIGN(region_size) \
+	. = ALIGN(_region_min_align); \
+	. = ALIGN(1 << LOG2CEIL(region_size))
+
 MEMORY
 {
 #ifdef CONFIG_XIP
@@ -100,6 +105,10 @@ SECTIONS
 		KEEP(*(.openocd_debug))
 		KEEP(*(".openocd_debug.*"))
 
+#ifdef CONFIG_USERSPACE
+		MPU_ALIGN(_image_text_size);
+#endif
+
 		_image_text_start = .;
 
 		*(.text)
@@ -109,14 +118,20 @@ SECTIONS
 #include <linker/kobject-text.ld>
 	} GROUP_LINK_IN(ROMABLE_REGION)
 
-    _image_text_end = .;
-
-	_image_rodata_start = .;
-#include <linker/common-rom.ld>
+	_image_text_end = .;
+	_image_text_size = _image_text_end - _image_text_start;
 
     SECTION_PROLOGUE(_RODATA_SECTION_NAME,,)
 	{
-		 . = ALIGN(4);
+#ifdef CONFIG_USERSPACE
+		MPU_ALIGN(_image_text_size);
+		MPU_ALIGN(_image_rodata_size);
+#else
+		. = ALIGN(4);
+#endif
+
+		_image_rodata_start = .;
+
 		 *(.srodata)
 		 *(".srodata.*")
 		 *(.rodata)
@@ -132,9 +147,11 @@ SECTIONS
 	. = ALIGN(4);
 	} GROUP_LINK_IN(ROMABLE_REGION)
 
+#include <linker/common-rom.ld>
 #include <linker/cplusplus-rom.ld>
 	_image_rodata_end = .;
-    _image_rom_end = .;
+	_image_rodata_size = _image_rodata_end - _image_rodata_start;
+	_image_rom_end = .;
 	_image_rom_size = _image_rom_end - _image_rom_start;
     GROUP_END(ROMABLE_REGION)
 

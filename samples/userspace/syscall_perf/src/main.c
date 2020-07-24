@@ -16,11 +16,11 @@ void main(void)
 
 	k_thread_create(&supervisor_thread, supervisor_stack, THREAD_STACKSIZE,
 			supervisor_thread_function, NULL, NULL, NULL,
-			-1, K_INHERIT_PERMS, 0);
+			-1, K_INHERIT_PERMS, K_NO_WAIT);
 
-	k_sleep(1000);
+	k_sleep(K_MSEC(1000));
 
 	k_thread_create(&user_thread, user_stack, THREAD_STACKSIZE,
 			user_thread_function, NULL, NULL, NULL,
-			-1, K_USER | K_INHERIT_PERMS, 0);
+			-1, K_USER | K_INHERIT_PERMS, K_NO_WAIT);
 }

@@ -2,6 +2,7 @@
  * Copyright (c) 2016 Jean-Paul Etienne <fractalclone@gmail.com>
  * Copyright (c) 2018 Foundries.io Ltd
  * Copyright (c) 2020 BayLibre, SAS
+ * Copyright (c) 2020 RISE Research Institutes of Sweden
  *
  * SPDX-License-Identifier: Apache-2.0
  */
