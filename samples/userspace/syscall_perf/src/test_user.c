@@ -21,7 +21,7 @@ void user_thread_function(void *p1, void *p2, void *p3)
 	printf("User thread started\n");
 
 	while (1) {
-		k_sleep(2000);
+		k_sleep(K_MSEC(2000));
 
 		inst_before = csr_read(0xC02);
 		cycle_before = csr_read(0xC00);

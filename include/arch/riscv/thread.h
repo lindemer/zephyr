@@ -53,19 +53,21 @@
 #ifdef CONFIG_USERSPACE
 #ifdef CONFIG_PMP_STACK_GUARD
 /*
- * 1 for interrupt stack guard: None
- * 1 for core state: R
- * 2 for program and read only data: RX
- * 2 for user thread stack: RW
+ * pmpaddr0 global interrupt stack guard [NA4]
+ * pmpaddr1 .text [NAPOT, RX]
+ * pmpaddr2 .rodata [NAPOT, RO]
+ * pmpaddr3 is_user_mode [NA4, RO]
+ * pmpaddr4 stack [NAPOT, RW]
  */
-#define PMP_REGION_NUM_FOR_U_THREAD	6
+#define PMP_REGION_NUM_FOR_U_THREAD 	5
 #else
 /*
- * 1 for core state: R
- * 2 for program and read only data: RX
- * 2 for user thread stack: RW
+ * pmpaddr0 .text [NAPOT, RX]
+ * pmpaddr1 .rodata [NAPOT, RO]
+ * pmpaddr2 is_user_mode [NA4, RO]
+ * pmpaddr3 stack [NAPOT, RW]
  */
-#define PMP_REGION_NUM_FOR_U_THREAD	5
+#define PMP_REGION_NUM_FOR_U_THREAD	4
 #endif
 #define PMP_MAX_DYNAMIC_REGION	(CONFIG_PMP_SLOT - PMP_REGION_NUM_FOR_U_THREAD)
 #endif

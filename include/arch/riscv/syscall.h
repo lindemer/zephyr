@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020 BayLibre, SAS
+ * Copyright (c) 2020 RISE Research Institutes of Sweden
  *
  * SPDX-License-Identifier: Apache-2.0
  */
